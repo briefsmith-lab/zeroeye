@@ -212,6 +212,7 @@ class LogAggregator:
         self.error_patterns: Counter = Counter()
         self.top_errors: Counter = Counter()
         self.errors_by_service: Dict[str, List[str]] = defaultdict(list)
+        self._sequence = 0
 
     def process_file(self, filepath: str) -> int:
         parsed_count = 0
@@ -219,12 +220,12 @@ class LogAggregator:
             if filepath.endswith('.gz'):
                 with gzip.open(filepath, 'rt', errors='replace') as f:
                     for line in f:
-                        if self._parse_line(line):
+                        if self._parse_line(line, filepath):
                             parsed_count += 1
             else:
                 with open(filepath, 'r', errors='replace') as f:
                     for line in f:
-                        if self._parse_line(line):
+                        if self._parse_line(line, filepath):
                             parsed_count += 1
         except Exception as e:
             logger.error(f"Error processing {filepath}: {e}")
@@ -240,10 +241,13 @@ class LogAggregator:
             logger.debug(f"  {filepath.name}: {count} entries")
         return total
 
-    def _parse_line(self, line: str) -> bool:
+    def _parse_line(self, line: str, source: Optional[str] = None) -> bool:
         for parser in self.parsers:
             entry = parser.parse(line)
             if entry:
+                entry['_sequence'] = self._sequence
+                entry['_source'] = source
+                self._sequence += 1
                 self.entries.append(entry)
                 ts = entry.get('timestamp')
                 if ts:
@@ -260,6 +264,18 @@ class LogAggregator:
                     self.errors_by_service[service].append(msg)
                     self.error_patterns[msg] += 1
                 return True
+        if line.strip():
+            self.entries.append({
+                'timestamp': None,
+                'level': 'warn',
+                'service': 'log_aggregator',
+                'message': 'Unable to parse log line',
+                'fields': {'raw': line.rstrip('\n')},
+                'format': 'warning',
+                '_sequence': self._sequence,
+                '_source': source,
+            })
+            self._sequence += 1
         return False
 
     def get_summary(self) -> Dict[str, Any]:
@@ -359,6 +375,30 @@ class LogAggregator:
             }, f, indent=2, default=str)
         logger.info(f"Report exported to {output_path}")
 
+    def export_jsonl(self, output_path: str):
+        def sort_key(entry: Dict[str, Any]) -> Tuple[int, Any, int]:
+            timestamp = entry.get('timestamp')
+            if timestamp:
+                return (0, timestamp, entry.get('_sequence', 0))
+            return (1, entry.get('_sequence', 0), entry.get('_sequence', 0))
+
+        with open(output_path, 'w') as f:
+            for entry in sorted(self.entries, key=sort_key):
+                metadata = {
+                    key: value
+                    for key, value in entry.items()
+                    if key not in ('timestamp', 'level', 'service', 'message', '_sequence', '_source')
+                }
+                record = {
+                    'timestamp': entry.get('timestamp'),
+                    'level': entry.get('level', 'unknown'),
+                    'source': entry.get('_source') or entry.get('service') or 'unknown',
+                    'message': entry.get('message', ''),
+                    'metadata': metadata,
+                }
+                f.write(json.dumps(record, default=str) + '\n')
+        logger.info(f"JSONL records exported to {output_path}")
+
     def generate_html_report(self, output_path: str):
         summary = self.get_summary()
         html = f"""<!DOCTYPE html>
@@ -409,7 +449,7 @@ def parse_args():
     parser.add_argument("--input", "-i", help="Input log file or glob pattern")
     parser.add_argument("--dir", help="Directory containing log files")
     parser.add_argument("--output", "-o", default="log_report.json", help="Output file path")
-    parser.add_argument("--format", choices=["json", "csv", "html"], default="json", help="Output format")
+    parser.add_argument("--format", choices=["json", "csv", "html", "jsonl"], default="json", help="Output format")
     parser.add_argument("--search", help="Search for a string in logs")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     return parser.parse_args()
@@ -456,6 +496,8 @@ def main():
         aggregator.export_csv(args.output)
     elif args.format == "html":
         aggregator.generate_html_report(args.output)
+    elif args.format == "jsonl":
+        aggregator.export_jsonl(args.output)
     else:
         aggregator.export_json(args.output)
 
