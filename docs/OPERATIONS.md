@@ -21,6 +21,8 @@ The legacy `tools/log_aggregator.py` utility can emit machine-readable JSONL for
 python3 tools/log_aggregator.py --input /var/log/app/*.log --format jsonl --output aggregated.jsonl
 ```
 
+The default `--format text` mode prints the existing human-readable summary to stdout. Use `--format jsonl` when downstream tools need one machine-readable record per log line.
+
 Each output line is a JSON object with this schema:
 
 | Field | Description |
