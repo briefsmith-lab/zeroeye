@@ -13,6 +13,26 @@
 > The known issues from the migration are tracked in the "K8s Migration Known
 > Issues" spreadsheet which is linked from the team's shared drive.
 
+## Legacy Log Aggregator JSONL Output
+
+The legacy `tools/log_aggregator.py` utility can emit machine-readable JSONL for downstream automation:
+
+```bash
+python3 tools/log_aggregator.py --input /var/log/app/*.log --format jsonl --output aggregated.jsonl
+```
+
+Each output line is a JSON object with this schema:
+
+| Field | Description |
+| --- | --- |
+| `timestamp` | Parsed Unix timestamp when one is available, otherwise `null`. |
+| `level` | Normalized log level such as `info`, `warn`, `error`, or `unknown`. |
+| `source` | Input file path when available, otherwise the parsed service name or `unknown`. |
+| `message` | Parsed log message or a warning message for lines that could not be parsed. |
+| `metadata` | Parser-specific fields, including the original format and raw line data when available. |
+
+JSONL output preserves timestamp ordering across input files when timestamps are parsed. Records without timestamps retain their original read order after timestamped records. Lines that cannot be parsed are emitted as warning records so automation can detect gaps instead of silently losing input.
+
 ## Monitoring
 
 ### Health Check Endpoints
